@@ -1,0 +1,78 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nexus-backend
+  namespace: omniverse
+  labels:
+    app: nexus-backend
+    version: stable
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: nexus-backend
+      version: stable
+  strategy:
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 1
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app: nexus-backend
+        version: stable
+    spec:
+      containers:
+      - name: backend
+        image: omniverse-nexus-backend:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 5003
+        resources:
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
+          requests:
+            cpu: "250m"
+            memory: "256Mi"
+        envFrom:
+        - configMapRef:
+            name: nexus-config
+        env:
+        - name: DATABASE_URL
+          value: "postgresql://postgres:ChangeMe2026PasswordSecure@nexus-db-endpoint:5432/omniverse_nexus?schema=public"
+        - name: REDIS_URL
+          value: "redis://nexus-redis-endpoint:6379"
+        - name: JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: nexus-secrets
+              key: jwt-secret
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 5003
+          initialDelaySeconds: 15
+          periodSeconds: 20
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 5003
+          initialDelaySeconds: 5
+          periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nexus-backend-service
+  namespace: omniverse
+spec:
+  type: ClusterIP
+  ports:
+  - port: 5003
+    targetPort: 5003
+    protocol: TCP
+  selector:
+    app: nexus-backend
+    version: stable

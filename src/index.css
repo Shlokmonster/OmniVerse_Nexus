@@ -1,0 +1,6 @@
+/* Cleared to prevent conflicts with the Google Stitch layout grids and Tailwind configuration */
+body {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}

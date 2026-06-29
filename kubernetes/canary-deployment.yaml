@@ -1,0 +1,61 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nexus-backend-canary
+  namespace: omniverse
+  labels:
+    app: nexus-backend
+    version: canary
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nexus-backend
+      version: canary
+  template:
+    metadata:
+      labels:
+        app: nexus-backend
+        version: canary
+    spec:
+      containers:
+      - name: backend
+        image: omniverse-nexus-backend:canary
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 5003
+        resources:
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
+          requests:
+            cpu: "250m"
+            memory: "256Mi"
+        envFrom:
+        - configMapRef:
+            name: nexus-config
+        env:
+        - name: DATABASE_URL
+          value: "postgresql://postgres:ChangeMe2026PasswordSecure@nexus-db-endpoint:5432/omniverse_nexus?schema=public"
+        - name: REDIS_URL
+          value: "redis://nexus-redis-endpoint:6379"
+        - name: JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: nexus-secrets
+              key: jwt-secret
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nexus-backend-canary-service
+  namespace: omniverse
+spec:
+  type: ClusterIP
+  selector:
+    app: nexus-backend
+    version: canary
+  ports:
+  - port: 5003
+    targetPort: 5003
+    protocol: TCP

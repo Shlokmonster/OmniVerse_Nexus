@@ -1,0 +1,108 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nexus-backend-blue
+  namespace: omniverse
+  labels:
+    app: nexus-backend
+    version: blue
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: nexus-backend
+      version: blue
+  template:
+    metadata:
+      labels:
+        app: nexus-backend
+        version: blue
+    spec:
+      containers:
+      - name: backend
+        image: omniverse-nexus-backend:blue
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 5003
+        resources:
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
+          requests:
+            cpu: "250m"
+            memory: "256Mi"
+        envFrom:
+        - configMapRef:
+            name: nexus-config
+        env:
+        - name: DATABASE_URL
+          value: "postgresql://postgres:ChangeMe2026PasswordSecure@nexus-db-endpoint:5432/omniverse_nexus?schema=public"
+        - name: REDIS_URL
+          value: "redis://nexus-redis-endpoint:6379"
+        - name: JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: nexus-secrets
+              key: jwt-secret
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nexus-backend-green
+  namespace: omniverse
+  labels:
+    app: nexus-backend
+    version: green
+spec:
+  replicas: 0
+  selector:
+    matchLabels:
+      app: nexus-backend
+      version: green
+  template:
+    metadata:
+      labels:
+        app: nexus-backend
+        version: green
+    spec:
+      containers:
+      - name: backend
+        image: omniverse-nexus-backend:green
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 5003
+        resources:
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
+          requests:
+            cpu: "250m"
+            memory: "256Mi"
+        envFrom:
+        - configMapRef:
+            name: nexus-config
+        env:
+        - name: DATABASE_URL
+          value: "postgresql://postgres:ChangeMe2026PasswordSecure@nexus-db-endpoint:5432/omniverse_nexus?schema=public"
+        - name: REDIS_URL
+          value: "redis://nexus-redis-endpoint:6379"
+        - name: JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: nexus-secrets
+              key: jwt-secret
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nexus-backend-service
+  namespace: omniverse
+spec:
+  type: ClusterIP
+  selector:
+    app: nexus-backend
+    version: blue
+  ports:
+  - port: 5003
+    targetPort: 5003
+    protocol: TCP

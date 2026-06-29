@@ -1,0 +1,34 @@
+# Example manifest illustrating how to configure Vault Agent Injection on our EKS deployments
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nexus-backend-vault-configured
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nexus-backend-vault
+  template:
+    metadata:
+      labels:
+        app: nexus-backend-vault
+      annotations:
+        # Enable Vault agent sidecar injection
+        vault.hashicorp.com/agent-inject: "true"
+        # Reference secret path inside Vault kv engine
+        vault.hashicorp.com/agent-inject-secret-database: "secret/data/database"
+        # Template formatting secret values as a dotenv-compatible structure inside the container volume
+        vault.hashicorp.com/agent-inject-template-database: |
+          {{- with secret "secret/data/database" -}}
+          DATABASE_URL="postgresql://{{ .Data.data.username }}:{{ .Data.data.password }}@{{ .Data.data.host }}:5432/omniverse_nexus?schema=public"
+          {{- end -}}
+        vault.hashicorp.com/role: "nexus-read-role"
+    spec:
+      containers:
+      - name: backend
+        image: omniverse-nexus-backend:latest
+        ports:
+        - containerPort: 5000
+        # The injected secrets are written to /vault/secrets/database volume, and we can read it on start!
+        command: ["/bin/sh", "-c", "source /vault/secrets/database && npm start"]

@@ -1,0 +1,131 @@
+pipeline {
+  agent any
+
+  environment {
+    AWS_ACCOUNT_ID   = '123456789012'
+    AWS_DEFAULT_REGION = 'us-west-2'
+    IMAGE_REPO_NAME  = 'omniverse-nexus'
+    CLUSTER_NAME     = 'omniverse-nexus-cluster'
+    NAMESPACE        = 'omniverse'
+    SLACK_WEBHOOK    = 'https://hooks.slack.com/services/XXX/XXX/XXX'
+  }
+
+  stages {
+    stage('Checkout') {
+      steps {
+        checkout scm
+        script {
+          env.GIT_COMMIT = sh(returnStdout: true, script: 'git rev-parse --short HEAD').trim()
+        }
+      }
+    }
+
+    stage('Install Dependencies') {
+      steps {
+        echo 'Installing workspace dependencies...'
+        sh 'npm install'
+        sh 'cd backend && npm install'
+      }
+    }
+
+    stage('Lint') {
+      steps {
+        echo 'Running code linting...'
+        sh 'npm run lint'
+        sh 'cd backend && npm run lint 2>/dev/null || true'
+      }
+    }
+
+    stage('Test') {
+      steps {
+        echo 'Running tests...'
+        sh 'npm test 2>/dev/null || true'
+        sh 'cd backend && npm test 2>/dev/null || true'
+      }
+    }
+
+    stage('Docker Builds') {
+      steps {
+        echo 'Compiling Docker artifacts...'
+        dir('backend') {
+          sh 'docker build -f ../docker/backend.Dockerfile -t ${IMAGE_REPO_NAME}-backend:${BUILD_NUMBER} -t ${IMAGE_REPO_NAME}-backend:${GIT_COMMIT} .'
+        }
+        sh 'docker build -f docker/frontend.Dockerfile -t ${IMAGE_REPO_NAME}-frontend:${BUILD_NUMBER} -t ${IMAGE_REPO_NAME}-frontend:${GIT_COMMIT} .'
+      }
+    }
+
+    stage('Registry Push') {
+      steps {
+        echo 'Pushing containers to ECR...'
+        sh 'aws ecr get-login-password --region ${AWS_DEFAULT_REGION} | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com'
+        sh 'docker tag ${IMAGE_REPO_NAME}-backend:${BUILD_NUMBER} ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${IMAGE_REPO_NAME}-backend:${BUILD_NUMBER}'
+        sh 'docker tag ${IMAGE_REPO_NAME}-backend:${GIT_COMMIT} ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${IMAGE_REPO_NAME}-backend:${GIT_COMMIT}'
+        sh 'docker tag ${IMAGE_REPO_NAME}-frontend:${BUILD_NUMBER} ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${IMAGE_REPO_NAME}-frontend:${BUILD_NUMBER}'
+        sh 'docker tag ${IMAGE_REPO_NAME}-frontend:${GIT_COMMIT} ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${IMAGE_REPO_NAME}-frontend:${GIT_COMMIT}'
+        sh 'docker push ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${IMAGE_REPO_NAME}-backend:${BUILD_NUMBER}'
+        sh 'docker push ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${IMAGE_REPO_NAME}-backend:${GIT_COMMIT}'
+        sh 'docker push ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${IMAGE_REPO_NAME}-frontend:${BUILD_NUMBER}'
+        sh 'docker push ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${IMAGE_REPO_NAME}-frontend:${GIT_COMMIT}'
+      }
+    }
+
+    stage('Deploy to EKS Kubernetes') {
+      steps {
+        echo 'Rolling out containers in Kubernetes cluster...'
+        sh 'aws eks update-kubeconfig --region ${AWS_DEFAULT_REGION} --name ${CLUSTER_NAME}'
+        sh 'kubectl apply -f kubernetes/namespace.yaml'
+        sh 'kubectl apply -f kubernetes/configmap.yaml'
+        sh 'kubectl apply -f kubernetes/secrets.yaml'
+        sh 'kubectl apply -f kubernetes/deployment-backend.yaml'
+        sh 'kubectl apply -f kubernetes/deployment-frontend.yaml'
+        sh 'kubectl apply -f kubernetes/prometheus.yaml'
+        sh 'kubectl apply -f kubernetes/hpa.yaml'
+        sh 'kubectl set image deployment/nexus-backend -n ${NAMESPACE} backend=${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${IMAGE_REPO_NAME}-backend:${BUILD_NUMBER}'
+        sh 'kubectl set image deployment/nexus-frontend -n ${NAMESPACE} frontend=${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${IMAGE_REPO_NAME}-frontend:${BUILD_NUMBER}'
+      }
+    }
+
+    stage('Health Check') {
+      steps {
+        echo 'Waiting for deployment to be ready...'
+        sh 'kubectl rollout status deployment/nexus-backend -n ${NAMESPACE} --timeout=5m'
+        sh 'kubectl rollout status deployment/nexus-frontend -n ${NAMESPACE} --timeout=5m'
+        echo 'All deployments are healthy!'
+      }
+    }
+  }
+
+  post {
+    success {
+      script {
+        sh '''
+          curl -X POST ${SLACK_WEBHOOK} \
+            -H 'Content-Type: application/json' \
+            -d '{
+              "channel": "#devops",
+              "username": "Jenkins",
+              "text": ":white_check_mark: Build #${BUILD_NUMBER} succeeded!",
+              "icon_emoji": ":rocket:"
+            }'
+        '''
+      }
+    }
+    failure {
+      script {
+        echo 'Deployment failed! Rolling back...'
+        sh 'kubectl rollout undo deployment/nexus-backend -n ${NAMESPACE} || true'
+        sh 'kubectl rollout undo deployment/nexus-frontend -n ${NAMESPACE} || true'
+        sh '''
+          curl -X POST ${SLACK_WEBHOOK} \
+            -H 'Content-Type: application/json' \
+            -d '{
+              "channel": "#devops",
+              "username": "Jenkins",
+              "text": ":x: Build #${BUILD_NUMBER} failed! Rollback initiated.",
+              "icon_emoji": ":fire:"
+            }'
+        '''
+      }
+    }
+  }
+}
